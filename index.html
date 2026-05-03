@@ -2,31 +2,37 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Maze Final Fix</title>
+    <title>Maze Global Multiplayer</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; color: #0f0; }
-        #lobby { position: fixed; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; z-index: 100; }
-        #ui { position: absolute; top: 10px; left: 10px; background: rgba(0,30,0,0.8); padding: 10px; border: 1px solid #0f0; font-size: 12px; }
-        .menu { border: 2px solid #0f0; padding: 20px; text-align: center; background: #001000; }
-        input { background: #000; color: #0f0; border: 1px solid #0f0; padding: 10px; margin: 10px; width: 200px; }
-        button { padding: 10px 20px; background: #0f0; color: #000; border: none; cursor: pointer; font-weight: bold; margin: 5px; }
-        .status-ok { color: #0f0; }
-        .status-err { color: #f00; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', Courier, monospace; color: #0f0; }
+        #lobby { position: fixed; inset: 0; background: radial-gradient(circle, #001 0%, #000 100%); display: flex; align-items: center; justify-content: center; z-index: 100; }
+        #ui { position: absolute; top: 15px; left: 15px; background: rgba(0,20,0,0.85); padding: 15px; border: 1px solid #0f0; border-radius: 4px; z-index: 10; pointer-events: none; line-height: 1.5; }
+        .menu { border: 2px solid #0f0; padding: 40px; text-align: center; box-shadow: 0 0 30px rgba(0,255,0,0.1); background: #000; }
+        input { background: #000; color: #0f0; border: 1px solid #0f0; padding: 12px; margin: 10px; width: 250px; font-size: 18px; outline: none; text-align: center; }
+        button { padding: 12px 30px; background: #0f0; color: #000; border: none; cursor: pointer; font-weight: bold; font-size: 14px; text-transform: uppercase; margin: 5px; transition: 0.2s; }
+        button:hover { background: #fff; box-shadow: 0 0 20px #0f0; }
+        .stat-val { color: #fff; font-weight: bold; }
+        #debug-info { color: #555; font-size: 10px; margin-top: 15px; }
     </style>
 </head>
 <body>
+
     <div id="lobby">
         <div class="menu">
-            <h2>MAZE MULTIPLAYER</h2>
-            <input type="text" id="room" placeholder="КОД (НАПР: 123)"><br>
-            <button onclick="start(true)">СОЗДАТЬ (HOST)</button>
-            <button onclick="start(false)">ВОЙТИ (JOIN)</button>
+            <h1 style="margin-top:0; letter-spacing: 5px;">MAZE NET</h1>
+            <input type="text" id="room" placeholder="КОД КОМНАТЫ (НАПР: 999)"><br>
+            <button onclick="initNetwork(true)">СОЗДАТЬ (HOST)</button>
+            <button onclick="initNetwork(false)">ВОЙТИ (JOIN)</button>
+            <div id="debug-info">Для игры через разные сети может потребоваться время на соединение</div>
         </div>
     </div>
+
     <div id="ui">
-        СВЯЗЬ: <span id="status">ОЖИДАНИЕ</span><br>
-        ПАКЕТЫ: <span id="pkts">0</span><br>
-        МОЙ ID: <span id="myid">...</span>
+        <b>СЕТЬ:</b> <span id="status" class="stat-val">ОЖИДАНИЕ</span><br>
+        <b>ПАКЕТЫ:</b> <span id="pkts" class="stat-val">0</span><br>
+        <hr style="border:0; border-top:1px solid #040">
+        <b>ВРАГ X:</b> <span id="ox" class="stat-val">0</span><br>
+        <b>ВРАГ Z:</b> <span id="oz" class="stat-val">0</span>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -35,89 +41,103 @@
 
     <script>
         let scene, camera, renderer, controls, peer, conn;
-        let otherPlayer = null;
-        let pCount = 0;
+        let remotePlayer = null;
         let keys = {};
+        let packetCount = 0;
 
-        function start(isHost) {
-            const code = document.getElementById('room').value.trim();
-            if(!code) return alert("Введите код!");
+        // Глобальная конфигурация для пробития NAT и брандмауэров
+        const iceConfig = {
+            'iceServers': [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' },
+                { urls: 'stun:stun.services.mozilla.com' }
+            ]
+        };
 
-            // 1. Очистка старого соединения перед стартом
-            if (peer) peer.destroy();
-
-            document.getElementById('lobby').style.display = 'none';
+        function initNetwork(isHost) {
+            const roomCode = document.getElementById('room').value.trim();
+            if(!roomCode) return alert("Введите код!");
             
-            // ТРЮК: Добавляем случайный хвост к ID хоста, чтобы избежать ошибки "ID занят"
-            // Но клиент должен знать точный ID, поэтому для простоты оставим код, 
-            // но добавим обработку ошибок.
-            peer = new Peer(isHost ? "room_" + code : "client_" + Math.floor(Math.random()*999), {
-                debug: 2,
-                config: {'iceServers': [{ urls: 'stun:stun.l.google.com:19302' }]}
-            });
+            document.getElementById('lobby').style.display = 'none';
+
+            // Создаем уникальные ID, чтобы избежать конфликтов
+            const myId = isHost ? "maze_room_" + roomCode : "maze_player_" + Math.random().toString(36).substr(2, 5);
+            
+            peer = new Peer(myId, { config: iceConfig, debug: 1 });
 
             peer.on('open', (id) => {
-                document.getElementById('myid').innerText = id;
-                document.getElementById('status').innerText = isHost ? "ЖДУ ПОДКЛЮЧЕНИЯ" : "ПОДКЛЮЧАЮСЬ...";
+                console.log("Мой ID в сети:", id);
+                document.getElementById('status').innerText = isHost ? "ЖДЕМ ИГРОКА..." : "ПОДКЛЮЧЕНИЕ К " + roomCode;
                 
                 if(!isHost) {
-                    // Пытаемся подключиться к ID хоста (room_код)
-                    const targetId = "room_" + code;
-                    conn = peer.connect(targetId, { reliable: true });
-                    setupConnection();
+                    // Пытаемся достучаться до хоста
+                    const target = "maze_room_" + roomCode;
+                    const c = peer.connect(target, { reliable: true });
+                    bindEvents(c);
                 }
             });
 
             peer.on('connection', (c) => {
-                conn = c;
-                setupConnection();
+                bindEvents(c);
             });
 
             peer.on('error', (err) => {
-                console.error(err);
-                document.getElementById('status').innerText = "ОШИБКА: " + err.type;
-                document.getElementById('status').className = "status-err";
-                // Если ошибка "ID занят", пробуем перезайти
-                if(err.type === 'unavailable-id') {
-                    alert("Этот код уже занят. Попробуйте другой номер.");
-                    location.reload();
-                }
+                console.error("PeerJS Error:", err);
+                if(err.type === 'unavailable-id') alert("Этот код комнаты уже занят!");
+                else document.getElementById('status').innerText = "ОШИБКА СЕТИ";
             });
 
-            init3D();
+            setupWorld();
         }
 
-        function setupConnection() {
+        function bindEvents(c) {
+            conn = c;
             conn.on('open', () => {
-                document.getElementById('status').innerText = "СВЯЗЬ ОК";
-                document.getElementById('status').className = "status-ok";
+                document.getElementById('status').innerText = "СВЯЗЬ УСТАНОВЛЕНА";
                 
-                // Постоянная отправка координат
+                // Цикл отправки координат (каждые 50мс)
                 setInterval(() => {
                     if(conn && conn.open) {
-                        conn.send({ x: camera.position.x, z: camera.position.z });
+                        conn.send({
+                            x: camera.position.x.toFixed(2),
+                            z: camera.position.z.toFixed(2)
+                        });
                     }
                 }, 50);
             });
 
             conn.on('data', (data) => {
-                pCount++;
-                document.getElementById('pkts').innerText = pCount;
+                packetCount++;
+                document.getElementById('pkts').innerText = packetCount;
+                
+                const px = parseFloat(data.x);
+                const pz = parseFloat(data.z);
+                document.getElementById('ox').innerText = px;
+                document.getElementById('oz').innerText = pz;
 
-                if(!otherPlayer) {
-                    const geo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
-                    const mat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-                    otherPlayer = new THREE.Mesh(geo, mat);
-                    scene.add(otherPlayer);
+                if(!remotePlayer) {
+                    const geometry = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+                    const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                    remotePlayer = new THREE.Mesh(geometry, material);
+                    scene.add(remotePlayer);
                 }
-                // Принудительно ставим куб в координаты
-                otherPlayer.position.set(data.x, 0.4, data.z);
+                
+                // Плавное обновление позиции врага
+                remotePlayer.position.set(px, 0.4, pz);
+            });
+
+            conn.on('close', () => {
+                document.getElementById('status').innerText = "РАЗОРВАНО";
+                setTimeout(() => location.reload(), 2000);
             });
         }
 
-        function init3D() {
+        function setupWorld() {
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
@@ -125,7 +145,10 @@
             controls = new THREE.PointerLockControls(camera, document.body);
             document.body.addEventListener('click', () => controls.lock());
 
-            scene.add(new THREE.GridHelper(100, 50, 0x00ff00, 0x111111));
+            // Сетка пола
+            const grid = new THREE.GridHelper(100, 50, 0x00ff00, 0x111111);
+            scene.add(grid);
+
             camera.position.set(0, 1.6, 5);
 
             window.onkeydown = (e) => keys[e.code] = true;
@@ -134,15 +157,22 @@
             function animate() {
                 requestAnimationFrame(animate);
                 if(controls.isLocked) {
-                    if(keys['KeyW']) controls.moveForward(0.1);
-                    if(keys['KeyS']) controls.moveForward(-0.1);
-                    if(keys['KeyA']) controls.moveRight(-0.1);
-                    if(keys['KeyD']) controls.moveRight(0.1);
+                    const moveSpeed = 0.15;
+                    if(keys['KeyW']) controls.moveForward(moveSpeed);
+                    if(keys['KeyS']) controls.moveForward(-moveSpeed);
+                    if(keys['KeyA']) controls.moveRight(-moveSpeed);
+                    if(keys['KeyD']) controls.moveRight(moveSpeed);
                 }
                 renderer.render(scene, camera);
             }
             animate();
         }
+
+        window.onresize = () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        };
     </script>
 </body>
 </html>
