@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>3D Maze Multiplayer - Lobby System</title>
+    <title>3D Maze - Avatars Edition</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
         #lobby { 
@@ -11,10 +11,16 @@
             display: flex; flex-direction: column; align-items: center; justify-content: center; 
             z-index: 100; color: #00ffcc; text-align: center;
         }
-        .box { border: 2px solid #00ffcc; padding: 40px; border-radius: 20px; background: rgba(0,0,0,0.9); box-shadow: 0 0 30px #00ffcc; }
-        input { padding: 12px; font-size: 20px; margin: 10px; border-radius: 8px; border: 1px solid #00ffcc; background: #111; color: #fff; text-align: center; width: 250px; outline: none; }
-        button { padding: 12px 40px; font-size: 18px; cursor: pointer; background: #00ffcc; border: none; font-weight: bold; border-radius: 8px; transition: 0.3s; color: #000; }
+        .box { border: 2px solid #00ffcc; padding: 30px; border-radius: 20px; background: rgba(0,0,0,0.9); box-shadow: 0 0 30px #00ffcc; max-width: 400px; }
+        input { padding: 12px; font-size: 18px; margin: 10px; border-radius: 8px; border: 1px solid #00ffcc; background: #111; color: #fff; text-align: center; width: 80%; outline: none; }
+        
+        .avatar-select { margin: 15px 0; display: flex; justify-content: center; gap: 10px; }
+        .avatar-opt { width: 40px; height: 40px; border-radius: 50%; cursor: pointer; border: 3px solid transparent; transition: 0.2s; }
+        .avatar-opt.active { border-color: #fff; transform: scale(1.2); }
+
+        button { padding: 12px 30px; font-size: 16px; cursor: pointer; background: #00ffcc; border: none; font-weight: bold; border-radius: 8px; transition: 0.3s; color: #000; margin: 5px; }
         button:hover { background: #fff; transform: scale(1.05); }
+        
         #ui { position: absolute; top: 20px; left: 20px; color: #00ffcc; z-index: 10; display: none; background: rgba(0,0,0,0.8); padding: 15px; border: 1px solid #00ffcc; border-radius: 10px; }
         #crosshair { position: fixed; top: 50%; left: 50%; color: #fff; transform: translate(-50%, -50%); z-index: 5; display: none; pointer-events: none; font-size: 24px; }
     </style>
@@ -25,13 +31,19 @@
 
     <div id="lobby">
         <div class="box">
-            <h1>СИСТЕМА ЛОББИ</h1>
-            <p>Введите код комнаты, чтобы играть вместе</p>
-            <input type="text" id="room-code" placeholder="КОД (например: uzb77)">
-            <br>
-            <button id="host-btn">СОЗДАТЬ / ЖДАТЬ</button>
-            <button id="join-btn">ПРИСОЕДИНИТЬСЯ</button>
-            <p style="font-size: 12px; color: #666; margin-top: 20px;">Управление: WASD + Мышь</p>
+            <h1>ВЫБОР АВАТАРА</h1>
+            <input type="text" id="room-code" placeholder="КОД КОМНАТЫ">
+            
+            <p>Выбери свой цвет:</p>
+            <div class="avatar-select">
+                <div class="avatar-opt active" style="background: #ff0055;" data-color="0xff0055"></div>
+                <div class="avatar-opt" style="background: #00ff55;" data-color="0x00ff55"></div>
+                <div class="avatar-opt" style="background: #0055ff;" data-color="0x0055ff"></div>
+                <div class="avatar-opt" style="background: #ffff00;" data-color="0xffff00"></div>
+            </div>
+
+            <button id="host-btn">СОЗДАТЬ</button>
+            <button id="join-btn">ВОЙТИ</button>
         </div>
     </div>
 
@@ -49,38 +61,42 @@
         let otherPlayerMesh = null;
         let keys = {};
         let isHost = false;
+        let myColor = "0xff0055";
 
-        const lobby = document.getElementById('lobby');
-        const ui = document.getElementById('ui');
+        // Выбор цвета в меню
+        document.querySelectorAll('.avatar-opt').forEach(opt => {
+            opt.onclick = () => {
+                document.querySelectorAll('.avatar-opt').forEach(el => el.classList.remove('active'));
+                opt.classList.add('active');
+                myColor = opt.getAttribute('data-color');
+            };
+        });
 
-        // Логика Хоста (тот, кто ждет)
         document.getElementById('host-btn').onclick = () => startSession(true);
-        // Логика Гостя (тот, кто подключается)
         document.getElementById('join-btn').onclick = () => startSession(false);
 
         function startSession(hostMode) {
             const code = document.getElementById('room-code').value.trim();
-            if (!code) return alert("Введите код комнаты!");
+            if (!code) return alert("Введите код!");
             
             isHost = hostMode;
-            lobby.style.display = 'none';
-            ui.style.display = 'block';
+            document.getElementById('lobby').style.display = 'none';
+            document.getElementById('ui').style.display = 'block';
             document.getElementById('crosshair').style.display = 'block';
             document.getElementById('room-display').innerText = code;
 
-            // Если ты хост — твой ID равен коду. Если гость — у тебя случайный ID.
-            const myPeerId = isHost ? code : 'guest_' + Math.random().toString(36).substr(2, 5);
+            const myPeerId = isHost ? code : 'g_' + Math.random().toString(36).substr(2, 4);
             initNetwork(myPeerId, code);
             initScene();
         }
 
         function initNetwork(myId, roomCode) {
-            peer = new Peer(myId);
+            peer = new Peer(myId, {
+                config: {'iceServers': [{ url: 'stun:stun.l.google.com:19302' }]}
+            });
 
-            peer.on('open', (id) => {
-                console.log('ID в сети:', id);
+            peer.on('open', () => {
                 if (!isHost) {
-                    // Если гость — подключаемся к хосту (чье имя = код комнаты)
                     conn = peer.connect(roomCode);
                     setupDataListener();
                 }
@@ -92,8 +108,7 @@
             });
 
             peer.on('error', (err) => {
-                if(err.type === 'unavailable-id') alert("Этот код комнаты уже занят кем-то другим!");
-                else alert("Ошибка: " + err.type);
+                alert("Ошибка: " + err.type);
                 location.reload();
             });
         }
@@ -105,12 +120,13 @@
 
             conn.on('data', (data) => {
                 if (!otherPlayerMesh) {
-                    const geo = new THREE.CapsuleGeometry(0.2, 0.4);
-                    const mat = new THREE.MeshStandardMaterial({color: 0xff0055, emissive: 0x220000});
+                    // Создаем аватара с цветом, который прислал другой игрок
+                    const geo = new THREE.CapsuleGeometry(0.25, 0.5);
+                    const mat = new THREE.MeshStandardMaterial({ color: parseInt(data.color) });
                     otherPlayerMesh = new THREE.Mesh(geo, mat);
                     scene.add(otherPlayerMesh);
                 }
-                otherPlayerMesh.position.set(data.x, 0.6, data.z);
+                otherPlayerMesh.position.set(data.x, 0.7, data.z);
             });
 
             conn.on('close', () => {
@@ -122,7 +138,7 @@
 
         function initScene() {
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x020202);
+            scene.background = new THREE.Color(0x050505);
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -131,43 +147,46 @@
             controls = new THREE.PointerLockControls(camera, document.body);
             document.body.addEventListener('click', () => controls.lock());
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const sun = new THREE.DirectionalLight(0x00ffcc, 1);
+            sun.position.set(5, 10, 5);
+            scene.add(sun);
 
-            // Стены (Maze)
-            const wallGeo = new THREE.BoxGeometry(1, 2, 1);
+            // Пол
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), new THREE.MeshStandardMaterial({color: 0x111111}));
+            floor.rotation.x = -Math.PI / 2;
+            scene.add(floor);
+
+            // Стены
+            const wallGeo = new THREE.BoxGeometry(1, 2.5, 1);
             const wallMat = new THREE.MeshStandardMaterial({ color: 0x00ffcc });
-            const maze = [
-                [1,1,1,1,1,1,1,1,1,1],
-                [1,0,0,0,1,0,0,0,0,1],
-                [1,0,1,0,0,0,1,1,0,1],
-                [1,0,0,0,1,0,0,0,0,1],
-                [1,1,1,1,1,1,1,1,1,1]
-            ];
-            maze.forEach((row, z) => row.forEach((v, x) => {
-                if(v) {
-                    const wall = new THREE.Mesh(wallGeo, wallMat);
-                    wall.position.set(x, 1, z);
-                    scene.add(wall);
-                }
-            }));
+            for(let i=0; i<15; i++) {
+                const w1 = new THREE.Mesh(wallGeo, wallMat);
+                w1.position.set(i-7, 1.25, -5);
+                scene.add(w1);
+                const w2 = new THREE.Mesh(wallGeo, wallMat);
+                w2.position.set(i-7, 1.25, 5);
+                scene.add(w2);
+            }
 
-            camera.position.set(1.5, 1.2, 1.5);
-            window.addEventListener('keydown', (e) => keys[e.code] = true);
-            window.addEventListener('keyup', (e) => keys[e.code] = false);
+            camera.position.set(0, 1.5, 0);
+            window.onkeydown = (e) => keys[e.code] = true;
+            window.onkeyup = (e) => keys[e.code] = false;
             animate();
         }
 
         function animate() {
             requestAnimationFrame(animate);
-            if (controls && controls.isLocked) {
-                const speed = 0.05;
+            if (controls.isLocked) {
+                const speed = 0.07;
                 if (keys['KeyW']) controls.moveForward(speed);
                 if (keys['KeyS']) controls.moveForward(-speed);
                 if (keys['KeyA']) controls.moveRight(-speed);
                 if (keys['KeyD']) controls.moveRight(speed);
 
                 if (conn && conn.open) {
-                    conn.send({ x: camera.position.x, z: camera.position.z });
+                    // Отправляем свои координаты И свой выбранный цвет
+                    conn.send({ x: camera.position.x, z: camera.position.z, color: myColor });
                 }
             }
             renderer.render(scene, camera);
