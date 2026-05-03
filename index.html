@@ -2,36 +2,28 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Maze Multiplayer Final</title>
+    <title>Maze Final Code-Only Fix</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, sans-serif; color: #0f0; }
-        #lobby { position: fixed; inset: 0; background: radial-gradient(circle, #001 0%, #000 100%); display: flex; align-items: center; justify-content: center; z-index: 100; }
-        #ui { position: absolute; top: 15px; left: 15px; background: rgba(0,20,0,0.8); padding: 15px; border: 1px solid #0f0; border-radius: 5px; z-index: 10; pointer-events: none; min-width: 180px; }
-        .menu { border: 2px solid #0f0; padding: 30px; text-align: center; box-shadow: 0 0 20px rgba(0,255,0,0.2); }
-        input { background: #000; color: #0f0; border: 1px solid #0f0; padding: 12px; margin: 10px; width: 220px; font-size: 16px; outline: none; }
-        button { padding: 12px 25px; background: #0f0; color: #000; border: none; cursor: pointer; font-weight: bold; font-size: 14px; text-transform: uppercase; transition: 0.3s; }
-        button:hover { background: #fff; box-shadow: 0 0 15px #0f0; }
-        #debug { color: #888; font-size: 10px; margin-top: 10px; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; color: #0f0; }
+        #lobby { position: fixed; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; z-index: 100; }
+        #ui { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.8); padding: 10px; border: 1px solid #0f0; }
+        .menu { border: 1px solid #0f0; padding: 20px; text-align: center; }
+        button { padding: 10px 20px; background: #0f0; color: #000; border: none; cursor: pointer; font-weight: bold; margin-top: 10px; }
+        input { background: #000; color: #0f0; border: 1px solid #0f0; padding: 10px; }
     </style>
 </head>
 <body>
-
     <div id="lobby">
         <div class="menu">
-            <h2 style="margin-top:0">MAZE P2P SYSTEM</h2>
-            <input type="text" id="room" placeholder="ВВЕДИТЕ КОД (НАПР: 777)"><br>
-            <button onclick="connect(true)">СОЗДАТЬ (HOST)</button>
-            <button onclick="connect(false)">ВОЙТИ (JOIN)</button>
-            <div id="debug">Используйте одинаковый код на обоих ноутбуках</div>
+            <h2>NETWORK TUNNEL</h2>
+            <input type="text" id="room" placeholder="КОД КОМНАТЫ"><br>
+            <button onclick="start(true)">HOST</button>
+            <button onclick="start(false)">JOIN</button>
         </div>
     </div>
-
     <div id="ui">
-        <b>СТАТУС:</b> <span id="status">ОЖИДАНИЕ</span><br>
-        <b>ПАКЕТЫ:</b> <span id="pkts">0</span><br>
-        <hr style="border:0; border-top:1px solid #040">
-        <b>ВРАГ X:</b> <span id="ox">0</span><br>
-        <b>ВРАГ Z:</b> <span id="oz">0</span>
+        СВЯЗЬ: <span id="status">НЕТ</span><br>
+        ПАКЕТЫ: <span id="pkts">0</span>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -40,131 +32,105 @@
 
     <script>
         let scene, camera, renderer, controls, peer, conn;
-        let otherPlayer = null;
-        let keys = {};
-        let receivedCount = 0;
+        let other = null;
+        let pCount = 0;
 
-        // Конфигурация для обхода сетевых ограничений ноутбуков
-        const peerConfig = {
-            config: {
+        function start(isHost) {
+            const code = document.getElementById('room').value;
+            document.getElementById('lobby').style.display = 'none';
+
+            // ТРЮК №1: Используем больше STUN-серверов для "пробития" порта
+            const config = {
                 'iceServers': [
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' }
+                    { urls: 'stun:stun2.l.google.com:19302' },
+                    { urls: 'stun:stun3.l.google.com:19302' },
+                    { urls: 'stun:stun4.l.google.com:19302' }
                 ]
-            }
-        };
+            };
 
-        function connect(isHost) {
-            const roomCode = document.getElementById('room').value.trim();
-            if(!roomCode) return alert("Введите код комнаты!");
-            
-            document.getElementById('lobby').style.display = 'none';
-            const myId = isHost ? roomCode : "p_" + Math.floor(Math.random()*9999);
-            
-            peer = new Peer(myId, peerConfig);
+            peer = new Peer(isHost ? code : "cl_" + Math.random().toString(36).substr(2,5), { config });
 
-            peer.on('open', (id) => {
-                console.log("ID в сети:", id);
-                document.getElementById('status').innerText = isHost ? "ЖДЕМ ИГРОКА..." : "ПОДКЛЮЧЕНИЕ...";
+            peer.on('open', () => {
                 if(!isHost) {
-                    const c = peer.connect(roomCode, { reliable: true });
-                    setupConnection(c);
+                    // ТРЮК №2: Используем надежный канал (TCP-like) вместо быстрого (UDP)
+                    // Это медленнее, но брандмауэры реже блокируют TCP
+                    conn = peer.connect(code, { reliable: true });
+                    setupConnection();
                 }
             });
 
             peer.on('connection', (c) => {
-                setupConnection(c);
-            });
-
-            peer.on('error', (err) => {
-                alert("Ошибка PeerJS: " + err.type);
-                location.reload();
+                conn = c;
+                setupConnection();
             });
 
             init3D();
         }
 
-        function setupConnection(c) {
-            conn = c;
+        function setupConnection() {
             conn.on('open', () => {
-                document.getElementById('status').innerText = "СВЯЗЬ УСТАНОВЛЕНА";
+                document.getElementById('status').innerText = "OK";
                 
-                // Цикл отправки данных (20 раз в секунду)
+                // ТРЮК №3: "Дребезжащая" отправка
+                // Если слать слишком часто, Windows сочтет это за атаку. 
+                // Сделаем задержку чуть больше — 60мс (16 раз в секунду)
                 setInterval(() => {
                     if(conn && conn.open) {
-                        conn.send({
-                            x: camera.position.x.toFixed(2),
-                            z: camera.position.z.toFixed(2)
-                        });
+                        // Шлем строкой, чтобы избежать ошибок парсинга объектов
+                        conn.send(`${camera.position.x}|${camera.position.z}`);
                     }
-                }, 50);
+                }, 60);
             });
 
             conn.on('data', (data) => {
-                receivedCount++;
-                document.getElementById('pkts').innerText = receivedCount;
-                
-                // Обновляем координаты врага
-                const posX = parseFloat(data.x);
-                const posZ = parseFloat(data.z);
-                document.getElementById('ox').innerText = posX;
-                document.getElementById('oz').innerText = posZ;
+                pCount++;
+                document.getElementById('pkts').innerText = pCount;
 
-                if(!otherPlayer) {
-                    const geo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
-                    const mat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-                    otherPlayer = new THREE.Mesh(geo, mat);
-                    scene.add(otherPlayer);
+                // Разбираем строку обратно в числа
+                const parts = data.split('|');
+                const x = parseFloat(parts[0]);
+                const z = parseFloat(parts[1]);
+
+                if(!other) {
+                    other = new THREE.Mesh(
+                        new THREE.BoxGeometry(0.8, 0.8, 0.8),
+                        new THREE.MeshBasicMaterial({ color: 0xff0000 })
+                    );
+                    scene.add(other);
                 }
-                
-                otherPlayer.position.set(posX, 0.4, posZ);
-            });
-
-            conn.on('close', () => {
-                document.getElementById('status').innerText = "ПОТЕРЯНО";
-                setTimeout(() => location.reload(), 2000);
+                other.position.set(x, 0.4, z);
             });
         }
 
         function init3D() {
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
-
             controls = new THREE.PointerLockControls(camera, document.body);
             document.body.addEventListener('click', () => controls.lock());
-
-            // Окружение
-            scene.add(new THREE.GridHelper(100, 40, 0x00ff00, 0x111111));
-            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
-
+            scene.add(new THREE.GridHelper(100, 50, 0x00ff00, 0x222222));
             camera.position.set(0, 1.6, 5);
-
+            
+            const keys = {};
             window.onkeydown = (e) => keys[e.code] = true;
             window.onkeyup = (e) => keys[e.code] = false;
 
-            function run() {
-                requestAnimationFrame(run);
+            function loop() {
+                requestAnimationFrame(loop);
                 if(controls.isLocked) {
-                    const speed = 0.12;
-                    if(keys['KeyW']) controls.moveForward(speed);
-                    if(keys['KeyS']) controls.moveForward(-speed);
-                    if(keys['KeyA']) controls.moveRight(-speed);
-                    if(keys['KeyD']) controls.moveRight(speed);
+                    if(keys['KeyW']) controls.moveForward(0.1);
+                    if(keys['KeyS']) controls.moveForward(-0.1);
+                    if(keys['KeyA']) controls.moveRight(-0.1);
+                    if(keys['KeyD']) controls.moveRight(0.1);
                 }
                 renderer.render(scene, camera);
             }
-            run();
+            loop();
         }
-
-        window.onresize = () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        };
     </script>
 </body>
 </html>
