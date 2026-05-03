@@ -2,20 +2,20 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Global 3D Maze Multiplayer</title>
+    <title>3D Maze Multiplayer - Lobby System</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, sans-serif; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
         #lobby { 
             position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
             background: radial-gradient(circle, #001a1a, #000); 
             display: flex; flex-direction: column; align-items: center; justify-content: center; 
             z-index: 100; color: #00ffcc; text-align: center;
         }
-        .box { border: 2px solid #00ffcc; padding: 40px; border-radius: 20px; background: rgba(0,0,0,0.8); box-shadow: 0 0 20px #00ffcc; }
-        input { padding: 12px; font-size: 18px; margin: 10px; border-radius: 8px; border: 1px solid #00ffcc; background: #111; color: #fff; text-align: center; width: 250px; outline: none; }
-        button { padding: 12px 40px; font-size: 18px; cursor: pointer; background: #00ffcc; border: none; font-weight: bold; border-radius: 8px; transition: 0.3s; }
+        .box { border: 2px solid #00ffcc; padding: 40px; border-radius: 20px; background: rgba(0,0,0,0.9); box-shadow: 0 0 30px #00ffcc; }
+        input { padding: 12px; font-size: 20px; margin: 10px; border-radius: 8px; border: 1px solid #00ffcc; background: #111; color: #fff; text-align: center; width: 250px; outline: none; }
+        button { padding: 12px 40px; font-size: 18px; cursor: pointer; background: #00ffcc; border: none; font-weight: bold; border-radius: 8px; transition: 0.3s; color: #000; }
         button:hover { background: #fff; transform: scale(1.05); }
-        #ui { position: absolute; top: 20px; left: 20px; color: #00ffcc; z-index: 10; display: none; background: rgba(0,0,0,0.8); padding: 15px; border: 1px solid #00ffcc; border-radius: 10px; min-width: 200px; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #00ffcc; z-index: 10; display: none; background: rgba(0,0,0,0.8); padding: 15px; border: 1px solid #00ffcc; border-radius: 10px; }
         #crosshair { position: fixed; top: 50%; left: 50%; color: #fff; transform: translate(-50%, -50%); z-index: 5; display: none; pointer-events: none; font-size: 24px; }
     </style>
 </head>
@@ -25,22 +25,21 @@
 
     <div id="lobby">
         <div class="box">
-            <h1>MAZE 3D MULTIPLAYER</h1>
-            <p>Управление: WASD + Мышь</p>
-            <input type="text" id="my-id" placeholder="Твой Ник (на англ.)">
+            <h1>СИСТЕМА ЛОББИ</h1>
+            <p>Введите код комнаты, чтобы играть вместе</p>
+            <input type="text" id="room-code" placeholder="КОД (например: uzb77)">
             <br>
-            <input type="text" id="peer-id" placeholder="Ник друга (для соед.)">
-            <br>
-            <button id="start-btn">ЗАПУСТИТЬ ИГРУ</button>
+            <button id="host-btn">СОЗДАТЬ / ЖДАТЬ</button>
+            <button id="join-btn">ПРИСОЕДИНИТЬСЯ</button>
+            <p style="font-size: 12px; color: #666; margin-top: 20px;">Управление: WASD + Мышь</p>
         </div>
     </div>
 
     <div id="ui">
-        <b>СТАТУС:</b> <span id="status">Ожидание...</span><br>
+        <b>КОМНАТА:</b> <span id="room-display">-</span><br>
         <b>ИГРОКОВ:</b> <span id="player-count">1</span>
     </div>
 
-    <!-- Подключение библиотек -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.3.1/dist/peerjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/js/controls/PointerLockControls.js"></script>
@@ -49,62 +48,65 @@
         let peer, conn, scene, camera, renderer, controls;
         let otherPlayerMesh = null;
         let keys = {};
-        let activeConnections = 0;
+        let isHost = false;
 
-        const startBtn = document.getElementById('start-btn');
+        const lobby = document.getElementById('lobby');
+        const ui = document.getElementById('ui');
 
-        startBtn.onclick = function() {
-            const myName = document.getElementById('my-id').value.trim();
-            const friendName = document.getElementById('peer-id').value.trim();
+        // Логика Хоста (тот, кто ждет)
+        document.getElementById('host-btn').onclick = () => startSession(true);
+        // Логика Гостя (тот, кто подключается)
+        document.getElementById('join-btn').onclick = () => startSession(false);
+
+        function startSession(hostMode) {
+            const code = document.getElementById('room-code').value.trim();
+            if (!code) return alert("Введите код комнаты!");
             
-            if (!myName) return alert("Пожалуйста, введи свой ник!");
-
-            document.getElementById('lobby').style.display = 'none';
-            document.getElementById('ui').style.display = 'block';
+            isHost = hostMode;
+            lobby.style.display = 'none';
+            ui.style.display = 'block';
             document.getElementById('crosshair').style.display = 'block';
+            document.getElementById('room-display').innerText = code;
 
-            initNetwork(myName, friendName);
+            // Если ты хост — твой ID равен коду. Если гость — у тебя случайный ID.
+            const myPeerId = isHost ? code : 'guest_' + Math.random().toString(36).substr(2, 5);
+            initNetwork(myPeerId, code);
             initScene();
-        };
+        }
 
-        function initNetwork(myId, friendId) {
+        function initNetwork(myId, roomCode) {
             peer = new Peer(myId);
 
             peer.on('open', (id) => {
-                document.getElementById('status').innerText = "В сети как: " + id;
-                if (friendId) {
-                    connectToPeer(friendId);
+                console.log('ID в сети:', id);
+                if (!isHost) {
+                    // Если гость — подключаемся к хосту (чье имя = код комнаты)
+                    conn = peer.connect(roomCode);
+                    setupDataListener();
                 }
             });
 
-            // Когда кто-то подключается к нам
-            peer.on('connection', (incomingConn) => {
-                conn = incomingConn;
+            peer.on('connection', (incoming) => {
+                conn = incoming;
                 setupDataListener();
             });
 
             peer.on('error', (err) => {
-                alert("Ошибка сети: " + err.type);
+                if(err.type === 'unavailable-id') alert("Этот код комнаты уже занят кем-то другим!");
+                else alert("Ошибка: " + err.type);
                 location.reload();
             });
         }
 
-        function connectToPeer(targetId) {
-            conn = peer.connect(targetId);
-            setupDataListener();
-        }
-
         function setupDataListener() {
             conn.on('open', () => {
-                document.getElementById('status').innerText = "Связь установлена!";
-                activeConnections = 1;
-                updatePlayerCount();
+                document.getElementById('player-count').innerText = "2";
             });
 
             conn.on('data', (data) => {
                 if (!otherPlayerMesh) {
                     const geo = new THREE.CapsuleGeometry(0.2, 0.4);
-                    const mat = new THREE.MeshStandardMaterial({color: 0xff0055, emissive: 0x550000});
+                    const mat = new THREE.MeshStandardMaterial({color: 0xff0055, emissive: 0x220000});
                     otherPlayerMesh = new THREE.Mesh(geo, mat);
                     scene.add(otherPlayerMesh);
                 }
@@ -114,21 +116,14 @@
             conn.on('close', () => {
                 if (otherPlayerMesh) scene.remove(otherPlayerMesh);
                 otherPlayerMesh = null;
-                activeConnections = 0;
-                updatePlayerCount();
-                document.getElementById('status').innerText = "Друг отключился";
+                document.getElementById('player-count').innerText = "1";
             });
-        }
-
-        function updatePlayerCount() {
-            document.getElementById('player-count').innerText = activeConnections + 1;
         }
 
         function initScene() {
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x020202);
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
@@ -136,46 +131,34 @@
             controls = new THREE.PointerLockControls(camera, document.body);
             document.body.addEventListener('click', () => controls.lock());
 
-            // Свет
-            const light = new THREE.AmbientLight(0xffffff, 0.8);
-            scene.add(light);
-            const pointLight = new THREE.PointLight(0x00ffcc, 1, 10);
-            scene.add(pointLight);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 
-            // Простая карта стен
-            const maze = [
-                [1,1,1,1,1,1,1,1,1,1],
-                [1,0,0,0,0,0,0,0,0,1],
-                [1,0,1,1,0,1,1,1,0,1],
-                [1,0,1,0,0,0,0,1,0,1],
-                [1,0,0,0,0,0,0,0,0,1],
-                [1,1,1,1,1,1,1,1,1,1]
-            ];
-
+            // Стены (Maze)
             const wallGeo = new THREE.BoxGeometry(1, 2, 1);
             const wallMat = new THREE.MeshStandardMaterial({ color: 0x00ffcc });
-            
-            maze.forEach((row, z) => {
-                row.forEach((v, x) => {
-                    if (v === 1) {
-                        const wall = new THREE.Mesh(wallGeo, wallMat);
-                        wall.position.set(x, 1, z);
-                        scene.add(wall);
-                    }
-                });
-            });
+            const maze = [
+                [1,1,1,1,1,1,1,1,1,1],
+                [1,0,0,0,1,0,0,0,0,1],
+                [1,0,1,0,0,0,1,1,0,1],
+                [1,0,0,0,1,0,0,0,0,1],
+                [1,1,1,1,1,1,1,1,1,1]
+            ];
+            maze.forEach((row, z) => row.forEach((v, x) => {
+                if(v) {
+                    const wall = new THREE.Mesh(wallGeo, wallMat);
+                    wall.position.set(x, 1, z);
+                    scene.add(wall);
+                }
+            }));
 
             camera.position.set(1.5, 1.2, 1.5);
-
             window.addEventListener('keydown', (e) => keys[e.code] = true);
             window.addEventListener('keyup', (e) => keys[e.code] = false);
-
             animate();
         }
 
         function animate() {
             requestAnimationFrame(animate);
-
             if (controls && controls.isLocked) {
                 const speed = 0.05;
                 if (keys['KeyW']) controls.moveForward(speed);
@@ -183,23 +166,12 @@
                 if (keys['KeyA']) controls.moveRight(-speed);
                 if (keys['KeyD']) controls.moveRight(speed);
 
-                // Отправка координат через PeerJS
                 if (conn && conn.open) {
                     conn.send({ x: camera.position.x, z: camera.position.z });
                 }
             }
-
             renderer.render(scene, camera);
         }
-
-        // Поддержка изменения размера окна
-        window.addEventListener('resize', () => {
-            if (camera && renderer) {
-                camera.aspect = window.innerWidth / window.innerHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(window.innerWidth, window.innerHeight);
-            }
-        });
     </script>
 </body>
 </html>
