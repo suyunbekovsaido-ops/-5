@@ -2,28 +2,31 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Maze Final Code-Only Fix</title>
+    <title>Maze Final Fix</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; color: #0f0; }
         #lobby { position: fixed; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; z-index: 100; }
-        #ui { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.8); padding: 10px; border: 1px solid #0f0; }
-        .menu { border: 1px solid #0f0; padding: 20px; text-align: center; }
-        button { padding: 10px 20px; background: #0f0; color: #000; border: none; cursor: pointer; font-weight: bold; margin-top: 10px; }
-        input { background: #000; color: #0f0; border: 1px solid #0f0; padding: 10px; }
+        #ui { position: absolute; top: 10px; left: 10px; background: rgba(0,30,0,0.8); padding: 10px; border: 1px solid #0f0; font-size: 12px; }
+        .menu { border: 2px solid #0f0; padding: 20px; text-align: center; background: #001000; }
+        input { background: #000; color: #0f0; border: 1px solid #0f0; padding: 10px; margin: 10px; width: 200px; }
+        button { padding: 10px 20px; background: #0f0; color: #000; border: none; cursor: pointer; font-weight: bold; margin: 5px; }
+        .status-ok { color: #0f0; }
+        .status-err { color: #f00; }
     </style>
 </head>
 <body>
     <div id="lobby">
         <div class="menu">
-            <h2>NETWORK TUNNEL</h2>
-            <input type="text" id="room" placeholder="КОД КОМНАТЫ"><br>
-            <button onclick="start(true)">HOST</button>
-            <button onclick="start(false)">JOIN</button>
+            <h2>MAZE MULTIPLAYER</h2>
+            <input type="text" id="room" placeholder="КОД (НАПР: 123)"><br>
+            <button onclick="start(true)">СОЗДАТЬ (HOST)</button>
+            <button onclick="start(false)">ВОЙТИ (JOIN)</button>
         </div>
     </div>
     <div id="ui">
-        СВЯЗЬ: <span id="status">НЕТ</span><br>
-        ПАКЕТЫ: <span id="pkts">0</span>
+        СВЯЗЬ: <span id="status">ОЖИДАНИЕ</span><br>
+        ПАКЕТЫ: <span id="pkts">0</span><br>
+        МОЙ ID: <span id="myid">...</span>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -32,31 +35,35 @@
 
     <script>
         let scene, camera, renderer, controls, peer, conn;
-        let other = null;
+        let otherPlayer = null;
         let pCount = 0;
+        let keys = {};
 
         function start(isHost) {
-            const code = document.getElementById('room').value;
+            const code = document.getElementById('room').value.trim();
+            if(!code) return alert("Введите код!");
+
+            // 1. Очистка старого соединения перед стартом
+            if (peer) peer.destroy();
+
             document.getElementById('lobby').style.display = 'none';
+            
+            // ТРЮК: Добавляем случайный хвост к ID хоста, чтобы избежать ошибки "ID занят"
+            // Но клиент должен знать точный ID, поэтому для простоты оставим код, 
+            // но добавим обработку ошибок.
+            peer = new Peer(isHost ? "room_" + code : "client_" + Math.floor(Math.random()*999), {
+                debug: 2,
+                config: {'iceServers': [{ urls: 'stun:stun.l.google.com:19302' }]}
+            });
 
-            // ТРЮК №1: Используем больше STUN-серверов для "пробития" порта
-            const config = {
-                'iceServers': [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' },
-                    { urls: 'stun:stun3.l.google.com:19302' },
-                    { urls: 'stun:stun4.l.google.com:19302' }
-                ]
-            };
-
-            peer = new Peer(isHost ? code : "cl_" + Math.random().toString(36).substr(2,5), { config });
-
-            peer.on('open', () => {
+            peer.on('open', (id) => {
+                document.getElementById('myid').innerText = id;
+                document.getElementById('status').innerText = isHost ? "ЖДУ ПОДКЛЮЧЕНИЯ" : "ПОДКЛЮЧАЮСЬ...";
+                
                 if(!isHost) {
-                    // ТРЮК №2: Используем надежный канал (TCP-like) вместо быстрого (UDP)
-                    // Это медленнее, но брандмауэры реже блокируют TCP
-                    conn = peer.connect(code, { reliable: true });
+                    // Пытаемся подключиться к ID хоста (room_код)
+                    const targetId = "room_" + code;
+                    conn = peer.connect(targetId, { reliable: true });
                     setupConnection();
                 }
             });
@@ -66,41 +73,45 @@
                 setupConnection();
             });
 
+            peer.on('error', (err) => {
+                console.error(err);
+                document.getElementById('status').innerText = "ОШИБКА: " + err.type;
+                document.getElementById('status').className = "status-err";
+                // Если ошибка "ID занят", пробуем перезайти
+                if(err.type === 'unavailable-id') {
+                    alert("Этот код уже занят. Попробуйте другой номер.");
+                    location.reload();
+                }
+            });
+
             init3D();
         }
 
         function setupConnection() {
             conn.on('open', () => {
-                document.getElementById('status').innerText = "OK";
+                document.getElementById('status').innerText = "СВЯЗЬ ОК";
+                document.getElementById('status').className = "status-ok";
                 
-                // ТРЮК №3: "Дребезжащая" отправка
-                // Если слать слишком часто, Windows сочтет это за атаку. 
-                // Сделаем задержку чуть больше — 60мс (16 раз в секунду)
+                // Постоянная отправка координат
                 setInterval(() => {
                     if(conn && conn.open) {
-                        // Шлем строкой, чтобы избежать ошибок парсинга объектов
-                        conn.send(`${camera.position.x}|${camera.position.z}`);
+                        conn.send({ x: camera.position.x, z: camera.position.z });
                     }
-                }, 60);
+                }, 50);
             });
 
             conn.on('data', (data) => {
                 pCount++;
                 document.getElementById('pkts').innerText = pCount;
 
-                // Разбираем строку обратно в числа
-                const parts = data.split('|');
-                const x = parseFloat(parts[0]);
-                const z = parseFloat(parts[1]);
-
-                if(!other) {
-                    other = new THREE.Mesh(
-                        new THREE.BoxGeometry(0.8, 0.8, 0.8),
-                        new THREE.MeshBasicMaterial({ color: 0xff0000 })
-                    );
-                    scene.add(other);
+                if(!otherPlayer) {
+                    const geo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+                    const mat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                    otherPlayer = new THREE.Mesh(geo, mat);
+                    scene.add(otherPlayer);
                 }
-                other.position.set(x, 0.4, z);
+                // Принудительно ставим куб в координаты
+                otherPlayer.position.set(data.x, 0.4, data.z);
             });
         }
 
@@ -110,17 +121,18 @@
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
+
             controls = new THREE.PointerLockControls(camera, document.body);
             document.body.addEventListener('click', () => controls.lock());
-            scene.add(new THREE.GridHelper(100, 50, 0x00ff00, 0x222222));
+
+            scene.add(new THREE.GridHelper(100, 50, 0x00ff00, 0x111111));
             camera.position.set(0, 1.6, 5);
-            
-            const keys = {};
+
             window.onkeydown = (e) => keys[e.code] = true;
             window.onkeyup = (e) => keys[e.code] = false;
 
-            function loop() {
-                requestAnimationFrame(loop);
+            function animate() {
+                requestAnimationFrame(animate);
                 if(controls.isLocked) {
                     if(keys['KeyW']) controls.moveForward(0.1);
                     if(keys['KeyS']) controls.moveForward(-0.1);
@@ -129,7 +141,7 @@
                 }
                 renderer.render(scene, camera);
             }
-            loop();
+            animate();
         }
     </script>
 </body>
