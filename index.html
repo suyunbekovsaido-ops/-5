@@ -2,31 +2,30 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Maze 2 Laptops Fix</title>
+    <title>Maze Fix - Numbers Only</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; color: #0f0; }
         #lobby { position: fixed; inset: 0; background: #000; display: flex; align-items: center; justify-content: center; z-index: 100; }
-        #ui { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.8); padding: 10px; border: 1px solid #0f0; font-size: 14px; pointer-events: none; }
-        #minimap { position: absolute; bottom: 10px; right: 10px; width: 150px; height: 150px; border: 1px solid #0f0; }
+        #ui { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.8); padding: 10px; border: 1px solid #0f0; z-index: 10; }
         .menu { border: 1px solid #0f0; padding: 20px; text-align: center; }
         input { background: #000; color: #0f0; border: 1px solid #0f0; padding: 10px; margin: 10px; width: 200px; }
         button { padding: 10px 20px; background: #0f0; color: #000; border: none; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
-    <canvas id="minimap"></canvas>
     <div id="lobby">
         <div class="menu">
-            <h2>MAZE MULTIPLAYER</h2>
+            <h2>MAZE CONNECT</h2>
             <input type="text" id="room" placeholder="КОД КОМНАТЫ"><br>
-            <button onclick="start(true)">СОЗДАТЬ (HOST)</button>
-            <button onclick="start(false)">ВОЙТИ (JOIN)</button>
+            <button onclick="start(true)">HOST</button>
+            <button onclick="start(false)">JOIN</button>
         </div>
     </div>
     <div id="ui">
-        СВЯЗЬ: <span id="status">НЕТ</span><br>
-        ИГРОКОВ: <span id="pc">1</span><br>
-        ПОЛУЧЕНО ПАКЕТОВ: <span id="pkts">0</span>
+        ИГРОКОВ: <span id="pc">1</span> | 
+        ПАКЕТЫ: <span id="pkts">0</span><br>
+        ТВОИ: <span id="myPos">0, 0</span><br>
+        ЧУЖИЕ: <span id="othPos">нет данных</span>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -35,101 +34,99 @@
 
     <script>
         let scene, camera, renderer, controls, peer, conn;
-        let remotePlayer = null;
+        let remoteMesh = null;
         let keys = {};
-        let packetsCount = 0;
+        let pCount = 0;
 
         function start(isHost) {
             const code = document.getElementById('room').value.trim();
-            if(!code) return alert("Введите код!");
+            if(!code) return alert("Нужен код!");
             document.getElementById('lobby').style.display = 'none';
 
-            // Используем только надежные сервера для связи между ноутами
-            peer = new Peer(isHost ? code : "id_" + Math.random().toString(36).substr(2,5), {
-                config: {'iceServers': [{ urls: 'stun:stun.l.google.com:19302' }]}
-            });
+            // Создаем соединение
+            peer = new Peer(isHost ? code : "cl_" + Math.floor(Math.random()*999));
 
             peer.on('open', () => {
                 if(!isHost) {
-                    conn = peer.connect(code, { reliable: true }); // Включаем надежный режим
-                    setupEvents();
+                    conn = peer.connect(code);
+                    setupNetwork();
                 }
             });
 
             peer.on('connection', (c) => {
                 conn = c;
-                setupEvents();
+                setupNetwork();
             });
 
             initGame();
         }
 
-        function setupEvents() {
+        function setupNetwork() {
             conn.on('open', () => {
-                document.getElementById('status').innerText = "ОК";
                 document.getElementById('pc').innerText = "2";
                 
-                // Каждые 50мс отправляем данные
+                // Отправляем ТОЛЬКО числа, чтобы не было ошибок
                 setInterval(() => {
                     if(conn && conn.open) {
-                        conn.send({ x: camera.position.x, z: camera.position.z });
+                        conn.send({
+                            x: Number(camera.position.x),
+                            z: Number(camera.position.z)
+                        });
                     }
                 }, 50);
             });
 
             conn.on('data', (data) => {
-                packetsCount++;
-                document.getElementById('pkts').innerText = packetsCount;
+                pCount++;
+                document.getElementById('pkts').innerText = pCount;
+                document.getElementById('othPos').innerText = Math.round(data.x) + ", " + Math.round(data.z);
 
-                if(!remotePlayer) {
-                    const geo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+                if(!remoteMesh) {
+                    // Создаем яркий красный куб
+                    const geo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
                     const mat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-                    remotePlayer = new THREE.Mesh(geo, mat);
-                    scene.add(remotePlayer);
+                    remoteMesh = new THREE.Mesh(geo, mat);
+                    scene.add(remoteMesh);
                 }
-                remotePlayer.position.set(data.x, 1, data.z);
+                
+                // Принудительно обновляем позицию
+                remoteMesh.position.set(data.x, 0.5, data.z);
             });
         }
 
         function initGame() {
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer = new THREE.WebGLRenderer();
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
             controls = new THREE.PointerLockControls(camera, document.body);
             document.body.addEventListener('click', () => controls.lock());
 
-            const grid = new THREE.GridHelper(50, 50, 0x00ff00, 0x111111);
+            // Сетка, чтобы видеть движение
+            const grid = new THREE.GridHelper(100, 50, 0x00ff00, 0x222222);
             scene.add(grid);
 
+            // Начальная позиция
             camera.position.set(0, 1.6, 5);
+
             window.onkeydown = (e) => keys[e.code] = true;
             window.onkeyup = (e) => keys[e.code] = false;
 
-            loop();
+            animate();
         }
 
-        function loop() {
-            requestAnimationFrame(loop);
+        function animate() {
+            requestAnimationFrame(animate);
             if(controls.isLocked) {
                 if(keys['KeyW']) controls.moveForward(0.1);
                 if(keys['KeyS']) controls.moveForward(-0.1);
                 if(keys['KeyA']) controls.moveRight(-0.1);
                 if(keys['KeyD']) controls.moveRight(0.1);
             }
-
-            // Отрисовка карты
-            const ctx = document.getElementById('minimap').getContext('2d');
-            ctx.clearRect(0,0,150,150);
-            ctx.fillStyle = "white";
-            ctx.fillRect(75 + camera.position.x*5, 75 + camera.position.z*5, 5, 5);
-            if(remotePlayer) {
-                ctx.fillStyle = "red";
-                ctx.fillRect(75 + remotePlayer.position.x*5, 75 + remotePlayer.position.z*5, 5, 5);
-            }
-
+            
+            document.getElementById('myPos').innerText = Math.round(camera.position.x) + ", " + Math.round(camera.position.z);
             renderer.render(scene, camera);
         }
     </script>
