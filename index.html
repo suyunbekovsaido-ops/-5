@@ -2,194 +2,132 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>3D Maze - Avatars Edition</title>
+    <title>Maze Debug Version</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
-        #lobby { 
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
-            background: radial-gradient(circle, #001a1a, #000); 
-            display: flex; flex-direction: column; align-items: center; justify-content: center; 
-            z-index: 100; color: #00ffcc; text-align: center;
-        }
-        .box { border: 2px solid #00ffcc; padding: 30px; border-radius: 20px; background: rgba(0,0,0,0.9); box-shadow: 0 0 30px #00ffcc; max-width: 400px; }
-        input { padding: 12px; font-size: 18px; margin: 10px; border-radius: 8px; border: 1px solid #00ffcc; background: #111; color: #fff; text-align: center; width: 80%; outline: none; }
-        
-        .avatar-select { margin: 15px 0; display: flex; justify-content: center; gap: 10px; }
-        .avatar-opt { width: 40px; height: 40px; border-radius: 50%; cursor: pointer; border: 3px solid transparent; transition: 0.2s; }
-        .avatar-opt.active { border-color: #fff; transform: scale(1.2); }
-
-        button { padding: 12px 30px; font-size: 16px; cursor: pointer; background: #00ffcc; border: none; font-weight: bold; border-radius: 8px; transition: 0.3s; color: #000; margin: 5px; }
-        button:hover { background: #fff; transform: scale(1.05); }
-        
-        #ui { position: absolute; top: 20px; left: 20px; color: #00ffcc; z-index: 10; display: none; background: rgba(0,0,0,0.8); padding: 15px; border: 1px solid #00ffcc; border-radius: 10px; }
-        #crosshair { position: fixed; top: 50%; left: 50%; color: #fff; transform: translate(-50%, -50%); z-index: 5; display: none; pointer-events: none; font-size: 24px; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        #lobby { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #001; display: flex; align-items: center; justify-content: center; z-index: 100; color: #0f0; }
+        #ui { position: absolute; top: 10px; left: 10px; color: #0f0; z-index: 10; background: rgba(0,0,0,0.5); padding: 10px; border: 1px solid #0f0; }
+        canvas { display: block; }
+        #minimap { position: absolute; bottom: 10px; right: 10px; width: 120px; height: 120px; border: 2px solid #0f0; z-index: 20; background: #000; }
     </style>
 </head>
 <body>
-
-    <div id="crosshair">+</div>
-
+    <canvas id="minimap"></canvas>
     <div id="lobby">
-        <div class="box">
-            <h1>ВЫБОР АВАТАРА</h1>
-            <input type="text" id="room-code" placeholder="КОД КОМНАТЫ">
-            
-            <p>Выбери свой цвет:</p>
-            <div class="avatar-select">
-                <div class="avatar-opt active" style="background: #ff0055;" data-color="0xff0055"></div>
-                <div class="avatar-opt" style="background: #00ff55;" data-color="0x00ff55"></div>
-                <div class="avatar-opt" style="background: #0055ff;" data-color="0x0055ff"></div>
-                <div class="avatar-opt" style="background: #ffff00;" data-color="0xffff00"></div>
-            </div>
-
-            <button id="host-btn">СОЗДАТЬ</button>
-            <button id="join-btn">ВОЙТИ</button>
+        <div style="border: 1px solid #0f0; padding: 20px;">
+            <input type="text" id="code" placeholder="ROOM CODE" style="background:#000; color:#0f0; border:1px solid #0f0; padding:10px;">
+            <button onclick="start(true)">HOST</button>
+            <button onclick="start(false)">JOIN</button>
         </div>
     </div>
-
-    <div id="ui">
-        <b>КОМНАТА:</b> <span id="room-display">-</span><br>
-        <b>ИГРОКОВ:</b> <span id="player-count">1</span>
-    </div>
+    <div id="ui">Игроков: <span id="pc">1</span> | ID: <span id="myid">...</span></div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.3.1/dist/peerjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/js/controls/PointerLockControls.js"></script>
 
     <script>
-        let peer, conn, scene, camera, renderer, controls;
-        let otherPlayerMesh = null;
+        let scene, camera, renderer, controls, peer, conn;
+        let otherPlayer = null;
         let keys = {};
-        let isHost = false;
-        let myColor = "0xff0055";
+        let moveTarget = { x: 0, z: 0 };
 
-        // Выбор цвета в меню
-        document.querySelectorAll('.avatar-opt').forEach(opt => {
-            opt.onclick = () => {
-                document.querySelectorAll('.avatar-opt').forEach(el => el.classList.remove('active'));
-                opt.classList.add('active');
-                myColor = opt.getAttribute('data-color');
-            };
-        });
-
-        document.getElementById('host-btn').onclick = () => startSession(true);
-        document.getElementById('join-btn').onclick = () => startSession(false);
-
-        function startSession(hostMode) {
-            const code = document.getElementById('room-code').value.trim();
-            if (!code) return alert("Введите код!");
-            
-            isHost = hostMode;
+        function start(isHost) {
+            const room = document.getElementById('code').value;
+            if(!room) return alert("Код!");
             document.getElementById('lobby').style.display = 'none';
-            document.getElementById('ui').style.display = 'block';
-            document.getElementById('crosshair').style.display = 'block';
-            document.getElementById('room-display').innerText = code;
+            
+            const myId = isHost ? room : "g_" + Math.random().toString(36).substr(2,4);
+            document.getElementById('myid').innerText = myId;
 
-            const myPeerId = isHost ? code : 'g_' + Math.random().toString(36).substr(2, 4);
-            initNetwork(myPeerId, code);
+            peer = new Peer(myId, { debug: 2 });
+
+            peer.on('open', () => {
+                if(!isHost) {
+                    conn = peer.connect(room);
+                    initConn();
+                }
+            });
+
+            peer.on('connection', (c) => {
+                conn = c;
+                initConn();
+            });
+
             initScene();
         }
 
-        function initNetwork(myId, roomCode) {
-            peer = new Peer(myId, {
-                config: {'iceServers': [{ url: 'stun:stun.l.google.com:19302' }]}
-            });
-
-            peer.on('open', () => {
-                if (!isHost) {
-                    conn = peer.connect(roomCode);
-                    setupDataListener();
-                }
-            });
-
-            peer.on('connection', (incoming) => {
-                conn = incoming;
-                setupDataListener();
-            });
-
-            peer.on('error', (err) => {
-                alert("Ошибка: " + err.type);
-                location.reload();
-            });
-        }
-
-        function setupDataListener() {
+        function initConn() {
             conn.on('open', () => {
-                document.getElementById('player-count').innerText = "2";
+                document.getElementById('pc').innerText = "2";
+                // Пинг каждые 100мс, чтобы не давать вкладке "уснуть"
+                setInterval(() => {
+                    if(conn.open) conn.send({x: camera.position.x, z: camera.position.z});
+                }, 100);
             });
 
             conn.on('data', (data) => {
-                if (!otherPlayerMesh) {
-                    // Создаем аватара с цветом, который прислал другой игрок
-                    const geo = new THREE.CapsuleGeometry(0.25, 0.5);
-                    const mat = new THREE.MeshStandardMaterial({ color: parseInt(data.color) });
-                    otherPlayerMesh = new THREE.Mesh(geo, mat);
-                    scene.add(otherPlayerMesh);
+                moveTarget = data;
+                if(!otherPlayer) {
+                    // Используем КУБ вместо капсулы (он надежнее)
+                    const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+                    const mat = new THREE.MeshBasicMaterial({color: 0xff0000});
+                    otherPlayer = new THREE.Mesh(geo, mat);
+                    scene.add(otherPlayer);
                 }
-                otherPlayerMesh.position.set(data.x, 0.7, data.z);
-            });
-
-            conn.on('close', () => {
-                if (otherPlayerMesh) scene.remove(otherPlayerMesh);
-                otherPlayerMesh = null;
-                document.getElementById('player-count').innerText = "1";
             });
         }
 
         function initScene() {
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x050505);
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer();
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
             controls = new THREE.PointerLockControls(camera, document.body);
             document.body.addEventListener('click', () => controls.lock());
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-            const sun = new THREE.DirectionalLight(0x00ffcc, 1);
-            sun.position.set(5, 10, 5);
-            scene.add(sun);
-
             // Пол
-            const floor = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), new THREE.MeshStandardMaterial({color: 0x111111}));
-            floor.rotation.x = -Math.PI / 2;
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), new THREE.MeshBasicMaterial({color: 0x111111}));
+            floor.rotation.x = -Math.PI/2;
             scene.add(floor);
 
-            // Стены
-            const wallGeo = new THREE.BoxGeometry(1, 2.5, 1);
-            const wallMat = new THREE.MeshStandardMaterial({ color: 0x00ffcc });
-            for(let i=0; i<15; i++) {
-                const w1 = new THREE.Mesh(wallGeo, wallMat);
-                w1.position.set(i-7, 1.25, -5);
-                scene.add(w1);
-                const w2 = new THREE.Mesh(wallGeo, wallMat);
-                w2.position.set(i-7, 1.25, 5);
-                scene.add(w2);
-            }
+            camera.position.y = 1.5;
+            camera.position.z = 5;
 
-            camera.position.set(0, 1.5, 0);
-            window.onkeydown = (e) => keys[e.code] = true;
-            window.onkeyup = (e) => keys[e.code] = false;
+            window.addEventListener('keydown', (e) => keys[e.code] = true);
+            window.addEventListener('keyup', (e) => keys[e.code] = false);
+
             animate();
         }
 
         function animate() {
             requestAnimationFrame(animate);
-            if (controls.isLocked) {
-                const speed = 0.07;
-                if (keys['KeyW']) controls.moveForward(speed);
-                if (keys['KeyS']) controls.moveForward(-speed);
-                if (keys['KeyA']) controls.moveRight(-speed);
-                if (keys['KeyD']) controls.moveRight(speed);
-
-                if (conn && conn.open) {
-                    // Отправляем свои координаты И свой выбранный цвет
-                    conn.send({ x: camera.position.x, z: camera.position.z, color: myColor });
-                }
+            if(controls.isLocked) {
+                if(keys['KeyW']) controls.moveForward(0.1);
+                if(keys['KeyS']) controls.moveForward(-0.1);
+                if(keys['KeyA']) controls.moveRight(-0.1);
+                if(keys['KeyD']) controls.moveRight(0.1);
             }
+
+            if(otherPlayer) {
+                otherPlayer.position.x = moveTarget.x;
+                otherPlayer.position.z = moveTarget.z;
+                otherPlayer.position.y = 1.5;
+            }
+
             renderer.render(scene, camera);
+            
+            // Простая отрисовка мини-карты
+            const ctx = document.getElementById('minimap').getContext('2d');
+            ctx.clearRect(0,0,120,120);
+            ctx.fillStyle = "white";
+            ctx.fillRect(60 + camera.position.x*5, 60 + camera.position.z*5, 4, 4);
+            if(otherPlayer) {
+                ctx.fillStyle = "red";
+                ctx.fillRect(60 + moveTarget.x*5, 60 + moveTarget.z*5, 4, 4);
+            }
         }
     </script>
 </body>
